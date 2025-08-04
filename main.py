@@ -111,4 +111,4 @@ def get_ativo(codigo: str):
     else:
         iv = calcular_iv(codigo)
         return {codigo: {"volatilidade_implícita_estim": iv}}
-        (Adiciona endpoint  /ativos com cache)
+
