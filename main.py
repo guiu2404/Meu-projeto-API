@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 
 app = FastAPI(
     title="API Mercado Financeiro",
-    description="Retorna volatilidade implícita (NDX, SPX) e ajuste diário (NQ, ES) diretamente das fontes oficiais.",
-    version="1.3"
+    description="Volatilidade implícita (NDX, SPX) e ajuste diário (NQ, ES) diretamente de fontes oficiais.",
+    version="1.4"
 )
 
-# Cache para evitar requisições repetidas à CME
+# Cache para evitar requisições repetidas
 cache_cme = {}
 cache_expira = {}
 
@@ -29,18 +29,34 @@ def calcular_iv(ticker):
         return None
     return None
 
-def pegar_settlement_cme(produto):
-    """Busca o ajuste diário diretamente do endpoint JSON oficial da CME."""
-    agora = datetime.utcnow()
-    if produto in cache_cme and agora < cache_expira.get(produto, agora):
-        return cache_cme[produto]
-
-    url = f"https://www.cmegroup.com/CmeWS/mvc/Quotes/Future/{produto}/G"
+def pegar_codigo_contrato(produto):
+    """Busca o código do contrato ativo (front month) na CME."""
+    url = f"https://www.cmegroup.com/CmeWS/mvc/Quotes/Front/{produto}/G"
     try:
         with httpx.Client(timeout=10) as client:
             r = client.get(url)
         data = r.json()
+        if "contractMonth" in data:
+            return data["contractMonth"]
+    except Exception:
+        return None
+    return None
 
+def pegar_settlement_cme(produto):
+    """Busca o ajuste diário usando o código do contrato ativo."""
+    agora = datetime.utcnow()
+    if produto in cache_cme and agora < cache_expira.get(produto, agora):
+        return cache_cme[produto]
+
+    contrato = pegar_codigo_contrato(produto)
+    if not contrato:
+        return None
+
+    url = f"https://www.cmegroup.com/CmeWS/mvc/Quotes/Future/{produto}/{contrato}/G"
+    try:
+        with httpx.Client(timeout=10) as client:
+            r = client.get(url)
+        data = r.json()
         if "quotes" in data and len(data["quotes"]) > 0:
             settlement = data["quotes"][0].get("lastSettle", None)
             if settlement is not None:
@@ -55,19 +71,24 @@ def pegar_settlement_cme(produto):
         return None
     return None
 
-@app.get("/", summary="Página inicial")
+@app.get("/")
 def home():
     return {
-        "mensagem": "API de Mercado Financeiro Online. Use /dados para acessar informações.",
-        "documentacao": "/docs"
+        "mensagem": "API de Mercado Financeiro Online",
+        "endpoints": ["/dados", "/docs"]
     }
 
-@app.get("/dados", summary="Retorna volatilidade implícita e ajuste diário")
+@app.get("/dados")
 def get_dados():
+    # Volatilidade NDX
     ndx_iv = calcular_iv("^NDX")
-    spx_iv = calcular_iv("^GSPC")  # símbolo corrigido
-    nq_settle = pegar_settlement_cme("NQ")  # usando JSON da CME
-    es_settle = pegar_settlement_cme("ES")  # usando JSON da CME
+
+    # Volatilidade SPX (tentativa principal)
+    spx_iv = calcular_iv("^GSPC")
+
+    # Ajuste NQ e ES
+    nq_settle = pegar_settlement_cme("NQ")
+    es_settle = pegar_settlement_cme("ES")
 
     return {
         "ativos_spot": {
